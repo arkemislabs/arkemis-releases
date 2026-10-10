@@ -106,6 +106,10 @@ jobs:
           npm run typecheck
       - name: Compile the native helpers (universal arm64 + x86_64)
         run: npm run build:native:macos
+      - name: Mac window placement (notch at the top, Mac title bar, Edit menu)
+        run: |
+          npm run build
+          node tests/mac-window-placement.e2e.mjs
       - name: Build, package and gate the macOS apps
         run: node scripts/release.mjs --ci-package --out dist/release-assets
       - name: Inspect the app bundles
@@ -120,6 +124,16 @@ jobs:
             codesign --verify --deep --strict "$app"
           done
           ls -la dist/release-assets
+      - name: Keep the Mac placement evidence
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: mac-placement-evidence
+          path: |
+            dist/test-evidence/mac-notch-top.png
+            dist/test-evidence/mac-window-placement.json
+          if-no-files-found: ignore
+          retention-days: 7
       - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         with:
           name: release-macos
