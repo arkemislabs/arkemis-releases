@@ -1,0 +1,156 @@
+# Builds and publishes an Arkemis desktop release, in the PUBLIC arkemislabs/arkemis-releases
+# repository: GitHub's standard Windows and macOS runners and Actions storage are free for
+# public repositories, so a release costs nothing. The private source never lands in this
+# repository: each job checks out arkemislabs/arkemis at the release tag with a read-only
+# token, builds on a throwaway runner, and only the installers are published here.
+#
+# Source of truth: arkemislabs/arkemis deploy/public-release-builder/build.yml (copied to
+# .github/workflows/build.yml in arkemis-releases by the release script's setup step).
+#
+# Started by `npm run release -- X.Y.Z` (it tags the source and dispatches this workflow), or
+# by "Run workflow" with a tag. Only people with write access to this repository can start it;
+# it has no pull_request trigger, and forks never receive secrets.
+#
+# Secret (Settings -> Secrets and variables -> Actions):
+#   SOURCE_TOKEN  fine-grained token owned by arkemislabs, repository arkemislabs/arkemis only,
+#                 permission Contents: Read-only, with an expiry date.
+# Publishing uses this repository's own GITHUB_TOKEN (contents: write on the publish job only).
+name: Build release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag in arkemislabs/arkemis (vX.Y.Z)
+        required: true
+        type: string
+      publish:
+        description: Publish the release here when the builds pass
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ inputs.tag }}
+  cancel-in-progress: false
+
+env:
+  RELEASE_TAG: ${{ inputs.tag }}
+
+jobs:
+  windows:
+    name: Windows (NSIS x64)
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check the tag and the source token
+        shell: bash
+        env:
+          SOURCE_TOKEN: ${{ secrets.SOURCE_TOKEN }}
+        run: |
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::Tag must look like v1.2.3"; exit 1; }
+          [ -n "$SOURCE_TOKEN" ] || { echo "::error::Add the SOURCE_TOKEN secret (read-only token for arkemislabs/arkemis)."; exit 1; }
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: arkemislabs/arkemis
+          ref: refs/tags/${{ inputs.tag }}
+          token: ${{ secrets.SOURCE_TOKEN }}
+          persist-credentials: false
+      - name: The tag matches the app version
+        shell: bash
+        run: test "v$(node -p "require('./package.json').version")" = "$RELEASE_TAG"
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - name: Tests
+        run: npm test
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Build, package and gate the Windows installer
+        run: node scripts/release.mjs --ci-package --out dist/release-assets
+      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: release-windows
+          path: dist/release-assets/
+          if-no-files-found: error
+          retention-days: 1
+
+  macos:
+    name: macOS (DMG + ZIP, arm64 + x64)
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - name: Check the tag
+        run: |
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::Tag must look like v1.2.3"; exit 1; }
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: arkemislabs/arkemis
+          ref: refs/tags/${{ inputs.tag }}
+          token: ${{ secrets.SOURCE_TOKEN }}
+          persist-credentials: false
+      - name: The tag matches the app version
+        run: test "v$(node -p "require('./package.json').version")" = "$RELEASE_TAG"
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - name: Packaging, release and updater tests; typecheck
+        run: |
+          node --test tests/release-package.test.mjs tests/release-versioning.test.mjs tests/app-updater.test.mjs
+          npm run typecheck
+      - name: Compile the native helpers (universal arm64 + x86_64)
+        run: npm run build:native:macos
+      - name: Build, package and gate the macOS apps
+        run: node scripts/release.mjs --ci-package --out dist/release-assets
+      - name: Inspect the app bundles
+        run: |
+          for app in dist/release-darwin-*/artifacts/mac*/Arkemis.app; do
+            echo "== $app"
+            echo "Electron: $(lipo -archs "$app/Contents/MacOS/Arkemis")"
+            echo "Helpers:  $(lipo -archs "$app/Contents/Resources/app.asar.unpacked/main/native/macos/keyboard-listener")"
+            test -f "$app/Contents/Resources/app.asar"
+            test ! -d "$app/Contents/Resources/app"
+            test -f "$app/Contents/Resources/app-update.yml"
+            codesign --verify --deep --strict "$app"
+          done
+          ls -la dist/release-assets
+      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: release-macos
+          path: dist/release-assets/
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    name: Publish the release
+    needs: [windows, macos]
+    if: inputs.publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: arkemislabs/arkemis
+          ref: refs/tags/${{ inputs.tag }}
+          token: ${{ secrets.SOURCE_TOKEN }}
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: "22"
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          pattern: release-*
+          path: dist/release-assets
+          merge-multiple: true
+      - name: Upload every platform and publish the release here
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/release.mjs --ci-publish dist/release-assets
