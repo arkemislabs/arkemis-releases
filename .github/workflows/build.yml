@@ -110,8 +110,32 @@ jobs:
         run: |
           npm run build
           node tests/mac-window-placement.e2e.mjs
+      - name: Load the stable Mac signing identity (keeps permissions across updates)
+        env:
+          MAC_SIGNING_IDENTITY: ${{ secrets.MAC_SIGNING_IDENTITY }}
+        run: |
+          if [ -z "$MAC_SIGNING_IDENTITY" ]; then
+            echo "No MAC_SIGNING_IDENTITY secret: the Mac apps stay ad-hoc signed."
+            exit 0
+          fi
+          keychain="$RUNNER_TEMP/arkemis-signing.keychain-db"
+          password="$(openssl rand -hex 16)"
+          printf '%s' "$MAC_SIGNING_IDENTITY" | base64 --decode > "$RUNNER_TEMP/identity.p12"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          security import "$RUNNER_TEMP/identity.p12" -k "$keychain" -P "arkemis-signing" -T /usr/bin/codesign
+          rm -f "$RUNNER_TEMP/identity.p12"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$password" "$keychain" > /dev/null
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          hash="$(security find-identity -p codesigning "$keychain" | awk '/Arkemis/ {print $2; exit}')"
+          [ -n "$hash" ] || { echo "::error::The Mac signing identity did not import"; exit 1; }
+          echo "ARKEMIS_MAC_SIGN_IDENTITY=$hash" >> "$GITHUB_ENV"
+          echo "ARKEMIS_MAC_SIGN_KEYCHAIN=$keychain" >> "$GITHUB_ENV"
       - name: Build, package and gate the macOS apps
         run: node scripts/release.mjs --ci-package --out dist/release-assets
+      - name: In-place Mac update (download, checksum, signature, swap)
+        run: node tests/mac-update-swap.e2e.mjs dist/release-assets
       - name: Inspect the app bundles
         run: |
           for app in dist/release-darwin-*/artifacts/mac*/Arkemis.app; do
@@ -122,6 +146,7 @@ jobs:
             test ! -d "$app/Contents/Resources/app"
             test -f "$app/Contents/Resources/app-update.yml"
             codesign --verify --deep --strict "$app"
+            echo "Signature: $(codesign -d -r- "$app" 2>&1 | grep designated)"
           done
           ls -la dist/release-assets
       - name: Keep the Mac placement evidence
