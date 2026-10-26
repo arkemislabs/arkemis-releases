@@ -1,0 +1,83 @@
+name: Mac check
+# Arkemis on real Macs without owning one, run in this public repo (free macOS minutes): GitHub's
+# macOS runners compile the native helpers from the private source, run every unit test, drive the
+# computer-use helper against TextEdit, and run the app's own end-to-end suites. Both an Apple
+# silicon and an Intel runner, so one pool's shortage doesn't block the check. Never signs,
+# packages or publishes anything; nothing from the source is uploaded.
+#
+# Source of truth: deploy/public-release-builder/mac-check.yml in arkemislabs/arkemis.
+# Secret: SOURCE_TOKEN (read-only access to arkemislabs/arkemis), as for build.yml.
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Source ref to check (branch, tag or commit of arkemislabs/arkemis)"
+        required: true
+        default: main
+permissions:
+  contents: read
+concurrency:
+  group: mac-check-${{ inputs.ref }}
+  cancel-in-progress: true
+jobs:
+  mac:
+    name: Mac (${{ matrix.runner }})
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15, macos-15-intel]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: arkemislabs/arkemis
+          ref: ${{ inputs.ref }}
+          token: ${{ secrets.SOURCE_TOKEN }}
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: "22"
+      - name: The Mac
+        run: sw_vers; uname -m; system_profiler SPDisplaysDataType | grep -E "Resolution|Display Type" || true
+      - run: npm ci
+      - name: Compile the native helpers (keyboard, insertion, computer use)
+        run: npm run build:native:macos
+      - name: Build the app (preload, channels, renderer bundle)
+        run: npm run build
+      - name: Every unit test
+        run: node --test tests/*.test.mjs
+      - name: Typecheck
+        if: always()
+        run: npm run typecheck
+      # Accessibility and Screen Recording for the computer-use helper, so the input half runs.
+      # Runner images allow writing the TCC database on some versions; when they don't, the
+      # smoke test says so plainly instead of passing.
+      - name: Allow the helper Accessibility and Screen Recording (best effort)
+        continue-on-error: true
+        run: |
+          HELPER="$PWD/main/native/macos/computer-use"
+          for DB in "/Library/Application Support/com.apple.TCC/TCC.db" "$HOME/Library/Application Support/com.apple.TCC/TCC.db"; do
+            for SERVICE in kTCCServiceAccessibility kTCCServiceScreenCapture; do
+              sudo sqlite3 "$DB" "INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, indirect_object_identifier, flags) VALUES ('$SERVICE','$HELPER',1,2,4,1,'UNUSED',0);" || true
+            done
+          done
+      - name: Computer use on a real Mac (TextEdit)
+        if: always()
+        run: node tests/macos-computer-use.smoke.mjs
+      - name: Window placement and update swap on macOS
+        if: always()
+        run: |
+          failed=""
+          for t in mac-window-placement mac-update-swap; do node "tests/$t.e2e.mjs" || failed="$failed $t"; done
+          [ -z "$failed" ] || { echo "::error::failed:$failed"; exit 1; }
+      - name: The app itself on macOS (browser, tour, spaces, tabs, chat, notch, memory, onboarding)
+        if: always()
+        run: |
+          failed=""
+          for t in browser-home unified-app browser-tour browser-onboarding browser-spaces browser-space-manager browser-tab-groups browser-tab-drag browser-chat-sidebar browser-chat-concurrency browser-agent-close browser-artifacts notch-runtime notch-fixture agent-memory desktop-security; do
+            echo "::group::$t"
+            node "tests/$t.e2e.mjs" || failed="$failed $t"
+            echo "::endgroup::"
+          done
+          [ -z "$failed" ] || { echo "::error::failed:$failed"; exit 1; }
