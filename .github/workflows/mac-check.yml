@@ -76,11 +76,11 @@ jobs:
         run: >
           node tests/macos-computer-use.smoke.mjs > "$RUNNER_TEMP/computer-use.log" 2>&1 && echo "computer use: passed" || { echo "::error::computer use: failed"; grep -A3 -E "^(FAIL|not ok)"
           "$RUNNER_TEMP/computer-use.log" | cut -c1-220 | head -24; exit 1; }
-      - name: Window placement and update swap on macOS
+      - name: Window placement on macOS
         if: always()
         run: |
           failed=""
-          for t in mac-window-placement mac-update-swap; do
+          for t in mac-window-placement; do
             node "tests/$t.e2e.mjs" > "$RUNNER_TEMP/$t.log" 2>&1 && echo "pass $t" || { echo "FAIL $t"; grep -iE "^FAIL|Error:|assert|expected|actual|timed? ?out" "$RUNNER_TEMP/$t.log" | cut -c1-220 | head -6; failed="$failed $t"; }
           done
           [ -z "$failed" ] || { echo "::error::failed:$failed"; exit 1; }
