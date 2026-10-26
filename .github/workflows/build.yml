@@ -83,7 +83,9 @@ jobs:
 
   macos:
     name: macOS (DMG + ZIP, arm64 + x64)
-    runs-on: macos-15
+    # Intel: GitHub's Apple silicon pool went days without a free runner (Oct 2026), and one
+    # runner builds both Macs either way (universal helpers; no bytecode for a two-architecture stage).
+    runs-on: macos-15-intel
     timeout-minutes: 60
     steps:
       - name: Check the tag
