@@ -73,6 +73,12 @@ jobs:
             done
           done
         if: always()
+      # TextEdit autocorrects "Arkemis" to "Artemis" as it is typed; the smoke reads back exact text.
+      - name: Turn off autocorrect for the smoke test
+        if: always()
+        run: |
+          defaults write -g NSAutomaticSpellingCorrectionEnabled -bool false
+          defaults write com.apple.TextEdit NSAutomaticSpellingCorrectionEnabled -bool false
       - name: Computer use on a real Mac (TextEdit)
         if: always()
         run: >
