@@ -7,11 +7,11 @@ name: Mac check
 #
 # Source of truth: deploy/public-release-builder/mac-check.yml in arkemislabs/arkemis.
 # Secret: SOURCE_TOKEN (read-only access to arkemislabs/arkemis), as for build.yml.
-on:
+'on':
   workflow_dispatch:
     inputs:
       ref:
-        description: "Source ref to check (branch, tag or commit of arkemislabs/arkemis)"
+        description: Source ref to check (branch, tag or commit of arkemislabs/arkemis)
         required: true
         default: main
 permissions:
@@ -25,64 +25,73 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runner: [macos-15, macos-15-intel]
+        runner:
+          - macos-15
+          - macos-15-intel
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           repository: arkemislabs/arkemis
           ref: ${{ inputs.ref }}
           token: ${{ secrets.SOURCE_TOKEN }}
           persist-credentials: false
-      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
         with:
-          node-version: "22"
+          node-version: '22'
       - name: The Mac
         run: sw_vers; uname -m; system_profiler SPDisplaysDataType | grep -E "Resolution|Display Type" || true
       - run: npm ci
       - name: Compile the native helpers (keyboard, insertion, computer use)
         run: npm run build:native:macos
       - name: Build the app (preload, channels, renderer bundle)
-        run: npm run build > "$RUNNER_TEMP/build.log" 2>&1 && echo "build passed" || { echo "::error::build failed"; grep -iE "error|cannot|not found|ENOENT|EACCES" "$RUNNER_TEMP/build.log" | cut -c1-200 | head -8; exit 1; }
-      # Logs here are public: steps print pass or fail per test and suite, never the source or a
-      # stack (full output stays in files on the runner, which is discarded).
+        run: >-
+          npm run build > "$RUNNER_TEMP/build.log" 2>&1 && echo "build passed" || { echo "::error::build failed"; grep -iE "error|cannot|not found|ENOENT|EACCES" "$RUNNER_TEMP/build.log" | cut -c1-200
+          | head -8; exit 1; }
       - name: Every unit test
         run: |
           node --test --test-reporter=tap tests/*.test.mjs > "$RUNNER_TEMP/unit.tap" 2>&1 && ok=1 || ok=0
           grep -cE "^ok " "$RUNNER_TEMP/unit.tap" | sed "s/^/passed: /"
-          grep -E "^not ok " "$RUNNER_TEMP/unit.tap" | sed -E "s/ - / failed: /" || true
+          # Each failure by name and its message (never the source or a stack).
+          grep -A14 -E "^not ok " "$RUNNER_TEMP/unit.tap" | grep -E "^not ok |^ +(error|expected|actual|code):" | cut -c1-220 || true
           [ "$ok" = 1 ]
       - name: Typecheck
         if: always()
         run: npm run typecheck > "$RUNNER_TEMP/typecheck.log" 2>&1 && echo "typecheck passed" || { echo "::error::typecheck failed ($(grep -c "error TS" "$RUNNER_TEMP/typecheck.log") errors)"; exit 1; }
-      # Accessibility and Screen Recording for the computer-use helper, so the input half runs.
-      # Runner images allow writing the TCC database on some versions; when they don't, the
-      # smoke test says so plainly instead of passing.
       - name: Allow the helper Accessibility and Screen Recording (best effort)
         continue-on-error: true
         run: |
-          HELPER="$PWD/main/native/macos/computer-use"
+          HELPERS="$PWD/main/native/macos/computer-use $PWD/main/native/macos/keyboard-listener $PWD/node_modules/electron/dist/Electron.app"
           for DB in "/Library/Application Support/com.apple.TCC/TCC.db" "$HOME/Library/Application Support/com.apple.TCC/TCC.db"; do
-            for SERVICE in kTCCServiceAccessibility kTCCServiceScreenCapture; do
-              sudo sqlite3 "$DB" "INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, indirect_object_identifier, flags) VALUES ('$SERVICE','$HELPER',1,2,4,1,'UNUSED',0);" || true
+            for CLIENT in $HELPERS; do
+              for SERVICE in kTCCServiceAccessibility kTCCServiceScreenCapture kTCCServiceListenEvent kTCCServicePostEvent; do
+                sudo sqlite3 "$DB" "INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, indirect_object_identifier, flags) VALUES ('$SERVICE','$CLIENT',1,2,4,1,'UNUSED',0);" || true
+              done
             done
           done
+        if: always()
       - name: Computer use on a real Mac (TextEdit)
         if: always()
-        run: |
-          node tests/macos-computer-use.smoke.mjs > "$RUNNER_TEMP/computer-use.log" 2>&1 && echo "computer use: passed" || { echo "::error::computer use: failed"; grep -E "^(ok|FAIL|PASS|skip|step)" "$RUNNER_TEMP/computer-use.log" | head -20; exit 1; }
+        run: >
+          node tests/macos-computer-use.smoke.mjs > "$RUNNER_TEMP/computer-use.log" 2>&1 && echo "computer use: passed" || { echo "::error::computer use: failed"; grep -A3 -E "^(FAIL|not ok)"
+          "$RUNNER_TEMP/computer-use.log" | cut -c1-220 | head -24; exit 1; }
       - name: Window placement and update swap on macOS
         if: always()
         run: |
           failed=""
-          for t in mac-window-placement mac-update-swap; do node "tests/$t.e2e.mjs" > "$RUNNER_TEMP/$t.log" 2>&1 && echo "pass $t" || { echo "FAIL $t"; failed="$failed $t"; }; done
+          for t in mac-window-placement mac-update-swap; do
+            node "tests/$t.e2e.mjs" > "$RUNNER_TEMP/$t.log" 2>&1 && echo "pass $t" || { echo "FAIL $t"; grep -iE "^FAIL|Error:|assert|expected|actual|timed? ?out" "$RUNNER_TEMP/$t.log" | cut -c1-220 | head -6; failed="$failed $t"; }
+          done
           [ -z "$failed" ] || { echo "::error::failed:$failed"; exit 1; }
       - name: The app itself on macOS (browser, tour, spaces, tabs, chat, notch, memory, onboarding)
         if: always()
-        run: |
+        run: >
           failed=""
-          for t in browser-home unified-app browser-tour browser-onboarding browser-spaces browser-space-manager browser-tab-groups browser-tab-drag browser-chat-sidebar browser-chat-concurrency browser-agent-close browser-artifacts notch-runtime notch-fixture agent-memory desktop-security; do
-            node "tests/$t.e2e.mjs" > "$RUNNER_TEMP/$t.log" 2>&1 && echo "pass $t ($(grep -cE "^ok " "$RUNNER_TEMP/$t.log") steps)" || { echo "FAIL $t: $(grep -E "^FAIL" "$RUNNER_TEMP/$t.log" | cut -c1-120 | head -3 | tr '\n' ';')"; failed="$failed $t"; }
+
+          for t in browser-home unified-app browser-tour browser-onboarding browser-spaces browser-space-manager browser-tab-groups browser-tab-drag browser-chat-sidebar browser-chat-concurrency
+          browser-agent-close browser-artifacts notch-runtime notch-fixture agent-memory desktop-security; do
+            node "tests/$t.e2e.mjs" > "$RUNNER_TEMP/$t.log" 2>&1 && echo "pass $t ($(grep -cE "^ok " "$RUNNER_TEMP/$t.log") steps)" || { echo "FAIL $t"; grep -A2 -E "^FAIL" "$RUNNER_TEMP/$t.log" | cut -c1-220 | head -12; grep -iE "Error:|timed? ?out" "$RUNNER_TEMP/$t.log" | cut -c1-200 | head -3; failed="$failed $t"; }
           done
+
           [ -z "$failed" ] || { echo "::error::failed:$failed"; exit 1; }
