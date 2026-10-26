@@ -14,6 +14,8 @@
 # Secret (Settings -> Secrets and variables -> Actions):
 #   SOURCE_TOKEN  fine-grained token owned by arkemislabs, repository arkemislabs/arkemis only,
 #                 permission Contents: Read-only, with an expiry date.
+#   ARKEMIS_UPDATE_SIGNING_KEY  the update signing key (`node scripts/update-signing.mjs --export`
+#                 on the publishing PC). Publishing stops without it; apps refuse unsigned updates.
 # Publishing uses this repository's own GITHUB_TOKEN (contents: write on the publish job only).
 name: Build release
 
@@ -192,4 +194,7 @@ jobs:
       - name: Upload every platform and publish the release here
         env:
           GH_TOKEN: ${{ github.token }}
+          # Ed25519 key that signs latest*.yml (scripts/update-signing.mjs --export); installed
+          # apps refuse updates without its signature, and publishing stops without it.
+          ARKEMIS_UPDATE_SIGNING_KEY: ${{ secrets.ARKEMIS_UPDATE_SIGNING_KEY }}
         run: node scripts/release.mjs --ci-publish dist/release-assets
