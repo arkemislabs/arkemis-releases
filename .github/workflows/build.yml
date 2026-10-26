@@ -193,6 +193,9 @@ jobs:
           pattern: release-*
           path: dist/release-assets
           merge-multiple: true
+      # Signing latest*.yml reads them with js-yaml: the publish step needs the dependencies too.
+      - name: Install the dependencies (no install scripts)
+        run: npm ci --ignore-scripts
       - name: Upload every platform and publish the release here
         env:
           GH_TOKEN: ${{ github.token }}
