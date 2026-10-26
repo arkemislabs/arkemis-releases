@@ -70,7 +70,8 @@ jobs:
           done
       - name: Computer use on a real Mac (TextEdit)
         if: always()
-        run: node tests/macos-computer-use.smoke.mjs > "$RUNNER_TEMP/computer-use.log" 2>&1 && echo "computer use: passed" || { echo "::error::computer use: failed"; grep -E "^(ok|FAIL|PASS|skip|step)" "$RUNNER_TEMP/computer-use.log" | head -20; exit 1; }
+        run: |
+          node tests/macos-computer-use.smoke.mjs > "$RUNNER_TEMP/computer-use.log" 2>&1 && echo "computer use: passed" || { echo "::error::computer use: failed"; grep -E "^(ok|FAIL|PASS|skip|step)" "$RUNNER_TEMP/computer-use.log" | head -20; exit 1; }
       - name: Window placement and update swap on macOS
         if: always()
         run: |
