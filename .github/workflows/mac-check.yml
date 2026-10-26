@@ -91,7 +91,7 @@ jobs:
 
           for t in browser-home unified-app browser-tour browser-onboarding browser-spaces browser-space-manager browser-tab-groups browser-tab-drag browser-chat-sidebar browser-chat-concurrency
           browser-agent-close browser-artifacts notch-runtime notch-fixture agent-memory desktop-security; do
-            node "tests/$t.e2e.mjs" > "$RUNNER_TEMP/$t.log" 2>&1 && echo "pass $t ($(grep -cE "^ok " "$RUNNER_TEMP/$t.log") steps)" || { echo "FAIL $t"; grep -A2 -E "^FAIL" "$RUNNER_TEMP/$t.log" | cut -c1-220 | head -12; grep -iE "Error:|timed? ?out" "$RUNNER_TEMP/$t.log" | cut -c1-200 | head -3; failed="$failed $t"; }
+            node "tests/$t.e2e.mjs" > "$RUNNER_TEMP/$t.log" 2>&1 && echo "pass $t ($(grep -cE "^ok " "$RUNNER_TEMP/$t.log") steps)" || { echo "FAIL $t"; grep -A2 -E "^FAIL" "$RUNNER_TEMP/$t.log" | cut -c1-220 | head -12; grep -iE "error|assert|expected|actual|timed? ?out" "$RUNNER_TEMP/$t.log" | grep -v "^ *at " | cut -c1-200 | head -6; failed="$failed $t"; }
           done
 
           [ -z "$failed" ] || { echo "::error::failed:$failed"; exit 1; }
