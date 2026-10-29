@@ -82,9 +82,11 @@ jobs:
           retention-days: 1
 
   macos:
-    name: macOS (DMG + ZIP, arm64 + x64)
+    name: macOS (DMG + ZIP, arm64 + x64; universal DMG)
     # Intel: GitHub's Apple silicon pool went days without a free runner (Oct 2026), and one
     # runner builds both Macs either way (universal helpers; no bytecode for a two-architecture stage).
+    # Being an Intel Mac, it also installs and opens the Intel-capable disk images before anything
+    # publishes: 3.0.10 reached Intel Macs as the Apple silicon build.
     runs-on: macos-15-intel
     timeout-minutes: 60
     steps:
@@ -106,7 +108,7 @@ jobs:
       - run: npm ci
       - name: Packaging, release and updater tests; typecheck
         run: |
-          node --test tests/release-package.test.mjs tests/release-versioning.test.mjs tests/app-updater.test.mjs
+          node --test tests/release-package.test.mjs tests/release-versioning.test.mjs tests/app-updater.test.mjs tests/mac-binaries.test.mjs
           npm run typecheck
       - name: Compile the native helpers (universal arm64 + x86_64)
         run: npm run build:native:macos
@@ -138,6 +140,8 @@ jobs:
           echo "ARKEMIS_MAC_SIGN_KEYCHAIN=$keychain" >> "$GITHUB_ENV"
       - name: Build, package and gate the macOS apps
         run: node scripts/release.mjs --ci-package --out dist/release-assets
+      - name: The universal and Intel disk images install and open on this Intel Mac
+        run: node tests/mac-install.e2e.mjs dist/release-assets --evidence dist/test-evidence/mac-install
       - name: In-place Mac update (download, checksum, signature, swap)
         run: node tests/mac-update-swap.e2e.mjs dist/release-assets
       - name: Inspect the app bundles
@@ -153,7 +157,7 @@ jobs:
             echo "Signature: $(codesign -d -r- "$app" 2>&1 | grep designated)"
           done
           ls -la dist/release-assets
-      - name: Keep the Mac placement evidence
+      - name: Keep the Mac placement and install evidence
         if: always()
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         with:
@@ -161,6 +165,7 @@ jobs:
           path: |
             dist/test-evidence/mac-notch-top.png
             dist/test-evidence/mac-window-placement.json
+            dist/test-evidence/mac-install/
           if-no-files-found: ignore
           retention-days: 7
       - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
